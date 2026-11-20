@@ -92,17 +92,23 @@ function parseImportObject(obj){
   return {items: out, count: count, dates: dates, skipped: skipped, source: source};
 }
 
-/* 같은 날 · 같은 제목 · 같은 분류는 중복으로 보고 건너뜀 */
+/* 같은 날 · 같은 제목 · 같은 분류는 중복으로 보고 새로 넣지 않되,
+   이미 있는 항목이 미완료이고 불러온 기록이 완료면 완료로 맞춰 줌 */
 function mergeItems(target, incoming){
   var added = 0;
   Object.keys(incoming).forEach(function(date){
     if (!target[date]) target[date] = [];
     var seen = {};
-    target[date].forEach(function(x){ seen[x.t + '|' + x.c] = 1; });
+    target[date].forEach(function(x){ seen[x.t + '|' + x.c] = x; });
     incoming[date].forEach(function(it){
       var k = it.t + '|' + it.c;
-      if (seen[k]) return;
-      seen[k] = 1;
+      var have = seen[k];
+      if (have){
+        if (it.d && !have.d) have.d = true;
+        if (!have.tm && it.tm) have.tm = it.tm;
+        return;
+      }
+      seen[k] = it;
       target[date].push(it);
       added++;
     });
