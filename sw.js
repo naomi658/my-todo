@@ -1,7 +1,7 @@
 /* 나만의 투두 — 오프라인 앱 셸 캐시
    화면·코드(html/js/json)는 네트워크 우선, 실패하면 캐시.
    이미지(아이콘)는 캐시 우선. 업데이트가 한 박자 늦게 도착하지 않게 하기 위함. */
-const CACHE = 'mytodo-shell-v2';
+const CACHE = 'mytodo-shell-v3';
 const ASSETS = [
   './',
   './index.html',

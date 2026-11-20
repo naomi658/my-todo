@@ -1,29 +1,44 @@
-/* 나만의 투두 · PWA 앱 셸 (개인 데이터 없음 — 기록은 사용자가 불러온 뒤 이 기기의 localStorage에만 저장) */
+/* 나만의 투두 · PWA 앱 셸 (개인 데이터 없음 — 기록·루틴은 사용자가 불러온 뒤 이 기기의 localStorage에만 저장) */
 'use strict';
 
 var STORE = 'mytodo-v2';
-var CAT = {R:{name:'루틴 · 출퇴근/업무', color:'var(--work)'}, T:{name:'할 일', color:'var(--todo)'}, E:{name:'운동', color:'var(--ex)'}};
+var CAT = {R:{name:'루틴 · 출퇴근/업무', short:'루틴', color:'var(--work)'}, T:{name:'할 일', short:'할 일', color:'var(--todo)'}, E:{name:'운동', short:'운동', color:'var(--ex)'}};
 var CAT_ORDER = ['R','T','E'];
 var DOW = ['일','월','화','수','목','금','토'];
+var DOW_LABEL_ORDER = [1,2,3,4,5,6,0];   // 화면 표기 순서(월~일)
 
 var state = null;
 var selDate = null;
 var viewYear = 0, viewMonth = 0;
+var view = 'todo';
+var editingRoutineId = null;
+var pickedDays = {};
 
-/* ---------- 날짜 ---------- */
+/* ---------- 작은 도우미 ---------- */
 function pad2(n){ return String(n).padStart(2,'0'); }
 function fmt(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 function todayStr(){ return fmt(new Date()); }
 function parseDate(s){ var p = String(s).split('-').map(Number); return new Date(p[0], p[1]-1, p[2]); }
 function isDateKey(k){ return typeof k === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(k); }
+function uid(){ return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function el(tag, cls, text){
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
 
-/* ---------- 불러오기 파서 (외부 형식 호환) ----------
-   지원 형식
-   1) 투두메이트 내보내기: {records:[{date:"YYYY-MM-DD", items:[{title,category,cat,done,time}]}]}
-   2) 이 앱/기존 my-todo.html 내보내기: {v:1, items:{"YYYY-MM-DD":[{t,c,d,tm}]}}
-   3) 날짜 → 배열 맵: {"YYYY-MM-DD":[["제목","T",1,""]]}
-   4) 위 1) 형식의 최상위 배열
-*/
+/* ---------- 루틴 기본값 ---------- */
+function defaultRoutines(){
+  return [
+    {id:'d1', t:'출근', c:'R', tm:'08:30', days:[1,2,3,4,5], on:true},
+    {id:'d2', t:'일일 업무보고', c:'R', tm:'', days:[1,2,3,4,5], on:true},
+    {id:'d3', t:'퇴근', c:'R', tm:'17:30', days:[1,2,3,4,5], on:true},
+    {id:'d4', t:'주간업무보고', c:'R', tm:'17:00', days:[4], on:true},
+    {id:'d5', t:'집 가기', c:'T', tm:'', days:[1,2,3,4,5], on:true}
+  ];
+}
+
 function normCat(cat, category){
   var c = String(cat == null ? '' : cat).trim().toUpperCase();
   if (c === 'R' || c === 'T' || c === 'E') return c;
@@ -33,6 +48,41 @@ function normCat(cat, category){
   return 'T';
 }
 
+function normalizeRoutine(r){
+  if (!r || typeof r !== 'object') return null;
+  var t = String((r.t != null ? r.t : (r.title != null ? r.title : ''))).trim();
+  if (!t) return null;
+  var days = (Array.isArray(r.days) ? r.days : []).map(Number).filter(function(d){ return d >= 0 && d <= 6 && d % 1 === 0; });
+  var uniq = [];
+  days.forEach(function(d){ if (uniq.indexOf(d) < 0) uniq.push(d); });
+  if (!uniq.length) return null;
+  uniq.sort(function(a,b){ return a-b; });
+  return {
+    id: (typeof r.id === 'string' && r.id) ? r.id : uid(),
+    t: t,
+    c: normCat(r.c != null ? r.c : r.cat, r.category),
+    tm: String(r.tm != null ? r.tm : (r.time != null ? r.time : '')) || '',
+    days: uniq,
+    on: r.on !== false
+  };
+}
+
+function parseRoutines(obj){
+  if (!obj || typeof obj !== 'object' || !Array.isArray(obj.routines)) return null;
+  var out = [];
+  obj.routines.forEach(function(r){
+    var n = normalizeRoutine(r);
+    if (n) out.push(n);
+  });
+  return out;
+}
+
+/* ---------- 불러오기 파서 (외부 형식 호환) ----------
+   1) 투두메이트 내보내기: {records:[{date:"YYYY-MM-DD", items:[{title,category,cat,done,time}]}]}
+   2) 이 앱/기존 my-todo.html 내보내기: {v:2, items:{"YYYY-MM-DD":[{t,c,d,tm}]}, routines:[...]}
+   3) 날짜 → 배열 맵: {"YYYY-MM-DD":[["제목","T",1,""]]}
+   4) 위 1) 형식의 최상위 배열
+*/
 function parseImportObject(obj){
   if (!obj || typeof obj !== 'object') throw new Error('JSON 형식이 아니에요');
   var out = {}, count = 0, skipped = 0, source = 'unknown';
@@ -119,7 +169,9 @@ function mergeItems(target, incoming){
 }
 
 /* ---------- 저장/불러오기 ---------- */
-function emptyState(){ return {v:2, items:{}, importedAt:null, bannerDismissed:false, autoFill:true}; }
+function emptyState(){
+  return {v:3, items:{}, routines:defaultRoutines(), importedAt:null, bannerDismissed:false, autoFill:true};
+}
 
 function seed(){ return emptyState(); }
 
@@ -129,6 +181,14 @@ function load(){
     if (!raw) return seed();
     var s = JSON.parse(raw);
     if (!s || !s.items || typeof s.items !== 'object') return seed();
+    if (!Array.isArray(s.routines)){
+      // 이전 버전(v2)에 저장된 기록은 그대로 두고 기본 루틴만 채워 넣음
+      s.routines = defaultRoutines();
+    }else{
+      var fixed = [];
+      s.routines.forEach(function(r){ var n = normalizeRoutine(r); if (n) fixed.push(n); });
+      s.routines = fixed;
+    }
     return s;
   }catch(e){ return seed(); }
 }
@@ -142,9 +202,9 @@ function itemsOf(date){ return (state.items && state.items[date]) || []; }
 function ensure(date){ if (!state.items[date]) state.items[date] = []; return state.items[date]; }
 
 function toast(msg){
-  var el = document.getElementById('toast');
-  el.textContent = msg; el.classList.add('show');
-  clearTimeout(el._t); el._t = setTimeout(function(){ el.classList.remove('show'); }, 2000);
+  var box = document.getElementById('toast');
+  box.textContent = msg; box.classList.add('show');
+  clearTimeout(box._t); box._t = setTimeout(function(){ box.classList.remove('show'); }, 2200);
 }
 
 /* ---------- 달력 ---------- */
@@ -153,9 +213,8 @@ function renderCalendar(){
   var cal = document.getElementById('cal');
   cal.innerHTML = '';
   DOW.forEach(function(d, i){
-    var el = document.createElement('div');
-    el.className = 'dow' + (i === 0 ? ' sun' : (i === 6 ? ' sat' : ''));
-    el.textContent = d; cal.appendChild(el);
+    var c = el('div', 'dow' + (i === 0 ? ' sun' : (i === 6 ? ' sat' : '')), d);
+    cal.appendChild(c);
   });
   var startDow = new Date(viewYear, viewMonth, 1).getDay();
   var daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
@@ -172,17 +231,15 @@ function renderCalendar(){
     btn.className = 'cell' + (c.other ? ' other' : '') + (c.d.getDay() === 0 ? ' sun' : '') + (c.d.getDay() === 6 ? ' sat' : '');
     if (ds === todayStr()) btn.classList.add('today');
     if (ds === selDate) btn.classList.add('sel');
-    var num = document.createElement('span'); num.className = 'num'; num.textContent = c.d.getDate();
+    var num = el('span', 'num', c.d.getDate());
     btn.appendChild(num);
-    var dots = document.createElement('div'); dots.className = 'dots';
+    var dots = el('div', 'dots');
     var done = list.filter(function(x){ return x.d; }).length;
     var total = list.length;
     if (total > 0){
       var n = Math.min(3, Math.ceil(total / 3));
       for (var k = 0; k < n; k++){
-        var dt = document.createElement('span');
-        dt.className = 'dot' + (k < Math.round(done / Math.max(total, 1) * n) ? ' done' : '');
-        dots.appendChild(dt);
+        dots.appendChild(el('span', 'dot' + (k < Math.round(done / Math.max(total, 1) * n) ? ' done' : '')));
       }
     }
     btn.appendChild(dots);
@@ -206,8 +263,8 @@ function renderDay(){
   var quick = document.getElementById('quick');
   quick.innerHTML = '';
   function mk(label, cls, fn){
-    var b = document.createElement('button');
-    b.type = 'button'; b.className = 'chip ' + cls; b.textContent = label; b.onclick = fn;
+    var b = el('button', 'chip ' + cls, label);
+    b.type = 'button'; b.onclick = fn;
     quick.appendChild(b);
   }
   mk('+ 오늘 루틴', 'solid', function(){ fillRoutine(false); });
@@ -219,32 +276,30 @@ function renderDay(){
   var groups = document.getElementById('groups');
   groups.innerHTML = '';
   if (!list.length){
-    var e = document.createElement('div'); e.className = 'empty';
-    e.textContent = '이 날의 기록이 없어요. 위 버튼으로 루틴을 채우거나 아래에서 추가해 보세요.';
-    groups.appendChild(e);
+    groups.appendChild(el('div', 'empty', '이 날의 기록이 없어요. 위 버튼으로 루틴을 채우거나 아래에서 추가해 보세요.'));
   }
   CAT_ORDER.forEach(function(cat){
     var arr = list.map(function(x, i){ return {x: x, i: i}; }).filter(function(o){ return o.x.c === cat; });
     if (!arr.length) return;
-    var g = document.createElement('div'); g.className = 'group';
-    var h = document.createElement('div'); h.className = 'ghead';
+    var g = el('div', 'group');
+    var h = el('div', 'ghead');
     h.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:' + CAT[cat].color +
       ';display:inline-block"></span>' + CAT[cat].name + ' <span class="n">' +
       arr.filter(function(o){ return o.x.d; }).length + '/' + arr.length + '</span>';
     g.appendChild(h);
-    var ul = document.createElement('ul'); ul.className = 'items';
+    var ul = el('ul', 'items');
     arr.forEach(function(o){
       var x = o.x, i = o.i;
-      var li = document.createElement('li');
+      var li = el('li');
       if (x.d) li.classList.add('done');
-      var box = document.createElement('div'); box.className = 'box'; box.textContent = x.d ? '✓' : '';
+      var box = el('div', 'box', x.d ? '✓' : '');
       box.onclick = function(){ x.d = !x.d; save(); renderDay(); renderCalendar(); };
-      var title = document.createElement('div'); title.className = 'title'; title.textContent = x.t;
+      var title = el('div', 'title', x.t);
       title.onclick = function(){ editTitle(title, i); };
       li.appendChild(box); li.appendChild(title);
-      if (x.tm){ var t = document.createElement('span'); t.className = 'time'; t.textContent = x.tm; li.appendChild(t); }
-      var del = document.createElement('button'); del.type = 'button'; del.className = 'del'; del.textContent = '×';
-      del.setAttribute('aria-label', '삭제');
+      if (x.tm) li.appendChild(el('span', 'time', x.tm));
+      var del = el('button', 'del', '×');
+      del.type = 'button'; del.setAttribute('aria-label', '삭제');
       del.onclick = function(){
         if (confirm('이 항목을 지울까요?\n' + x.t)){ list.splice(i, 1); save(); renderDay(); renderCalendar(); }
       };
@@ -258,12 +313,12 @@ function renderDay(){
   document.getElementById('aStat').textContent = allStat();
 }
 
-function editTitle(el, index){
+function editTitle(node, index){
   var arr = ensure(selDate);
   var cur = arr[index].t;
-  var input = document.createElement('input');
+  var input = el('input');
   input.type = 'text'; input.value = cur; input.maxLength = 80;
-  el.textContent = ''; el.appendChild(input); input.focus(); input.select();
+  node.textContent = ''; node.appendChild(input); input.focus(); input.select();
   var commit = function(){
     var v = input.value.trim();
     if (v){ arr[index].t = v; save(); }
@@ -283,24 +338,21 @@ function addItem(title, cat, time){
   save(); renderDay(); renderCalendar();
 }
 
-/* 요일 기준 기본 루틴 */
-function routineSet(dateStr){
+/* ---------- 루틴 적용 ---------- */
+function routinesFor(dateStr){
   var dow = parseDate(dateStr).getDay();
-  var set = [];
-  if (dow >= 1 && dow <= 5){
-    set.push(['출근', 'R', '08:30'], ['일일 업무보고', 'R', ''], ['퇴근', 'R', '17:30']);
-    if (dow === 4) set.push(['주간업무보고', 'R', '17:00']);
-    set.push(['집 가기', 'T', '']);
-  }
-  return set;
+  return (state.routines || []).filter(function(r){ return r.on !== false && r.days.indexOf(dow) >= 0; });
 }
+
 function fillRoutine(silent){
-  var set = routineSet(selDate);
-  if (!set.length){ if (!silent) toast('주말에는 기본 루틴이 없어요'); return; }
+  var set = routinesFor(selDate);
+  if (!set.length){
+    if (!silent) toast('이 요일에 맞는 루틴이 없어요 · 루틴 화면에서 등록해 보세요');
+    return;
+  }
   var arr = ensure(selDate), added = 0;
-  set.forEach(function(row){
-    var t = row[0], c = row[1], tm = row[2];
-    if (!arr.some(function(x){ return x.t === t && x.c === c; })){ arr.push({t: t, c: c, d: false, tm: tm}); added++; }
+  set.forEach(function(r){
+    if (!arr.some(function(x){ return x.t === r.t && x.c === r.c; })){ arr.push({t: r.t, c: r.c, d: false, tm: r.tm || ''}); added++; }
   });
   save(); renderDay(); renderCalendar();
   if (!silent) toast(added ? added + '개 루틴을 채웠어요' : '이미 루틴이 다 있어요');
@@ -322,6 +374,158 @@ function allStat(){
   return total + '건 · ' + dates + '일';
 }
 
+/* ---------- 루틴 관리 화면 ---------- */
+function dayLabel(days){
+  var s = days.slice().sort(function(a,b){ return a-b; });
+  if (s.length === 7) return '매일';
+  if (s.join(',') === '1,2,3,4,5') return '평일';
+  if (s.join(',') === '0,6') return '주말';
+  return s.map(function(d){ return DOW[d]; }).join('·');
+}
+
+function renderRoutines(){
+  var host = document.getElementById('routineList');
+  host.innerHTML = '';
+  var list = state.routines || [];
+  var onCount = list.filter(function(r){ return r.on !== false; }).length;
+  document.getElementById('routineCount').textContent = list.length ? (onCount + ' / ' + list.length + '개 켜짐') : '';
+
+  if (!list.length){
+    var e = el('div', 'empty', '아직 등록된 루틴이 없어요. 위에서 첫 루틴을 등록해 보세요.');
+    host.appendChild(e);
+    var back = el('button', 'rbtn', '기본 루틴 다시 넣기');
+    back.type = 'button';
+    back.style.marginTop = '10px';
+    back.onclick = function(){
+      state.routines = defaultRoutines(); save(); renderRoutines();
+      toast('기본 루틴을 넣었어요');
+    };
+    host.appendChild(back);
+    return;
+  }
+
+  list.forEach(function(r){
+    var card = el('div', 'ritem' + (r.on === false ? ' off' : ''));
+    var row1 = el('div', 'r1');
+    var dot = el('span', 'rdot');
+    dot.style.background = CAT[r.c].color;
+    row1.appendChild(dot);
+    row1.appendChild(el('div', 'rtitle', r.t));
+    if (r.tm) row1.appendChild(el('span', 'rtime', r.tm));
+    card.appendChild(row1);
+
+    var row2 = el('div', 'r2');
+    row2.appendChild(el('div', 'rdays', CAT[r.c].short + ' · ' + dayLabel(r.days)));
+
+    var sw = el('button', 'sw' + (r.on !== false ? ' on' : ''));
+    sw.type = 'button';
+    sw.setAttribute('aria-label', '이 루틴 켜기/끄기');
+    sw.onclick = function(){
+      r.on = (r.on === false);
+      save(); renderRoutines();
+      toast(r.on ? '루틴을 켰어요' : '루틴을 껐어요');
+    };
+    row2.appendChild(sw);
+
+    var edit = el('button', 'rbtn', '수정');
+    edit.type = 'button';
+    edit.onclick = function(){ startEditRoutine(r.id); };
+    row2.appendChild(edit);
+
+    var del = el('button', 'rbtn', '삭제');
+    del.type = 'button';
+    del.onclick = function(){
+      if (!confirm('이 루틴을 지울까요?\n' + r.t)) return;
+      state.routines = state.routines.filter(function(x){ return x.id !== r.id; });
+      save(); renderRoutines();
+      if (editingRoutineId === r.id) resetRoutineForm();
+      toast('루틴을 지웠어요');
+    };
+    row2.appendChild(del);
+
+    card.appendChild(row2);
+    host.appendChild(card);
+  });
+}
+
+function syncDayChips(){
+  var chips = document.getElementById('rtDays').children;
+  for (var i = 0; i < chips.length; i++){
+    var d = Number(chips[i].getAttribute('data-day'));
+    if (pickedDays[d]) chips[i].classList.add('on');
+    else chips[i].classList.remove('on');
+  }
+}
+
+function setPickedDays(days){
+  pickedDays = {};
+  (days || []).forEach(function(d){ pickedDays[d] = true; });
+  syncDayChips();
+}
+
+function resetRoutineForm(){
+  editingRoutineId = null;
+  document.getElementById('rtFormHead').textContent = '새 루틴 등록';
+  document.getElementById('rtSubmit').textContent = '루틴 추가';
+  document.getElementById('rtCancel').hidden = true;
+  document.getElementById('rtTitle').value = '';
+  document.getElementById('rtCat').value = 'R';
+  document.getElementById('rtTime').value = '';
+  setPickedDays([]);
+}
+
+function startEditRoutine(id){
+  var r = (state.routines || []).filter(function(x){ return x.id === id; })[0];
+  if (!r) return;
+  editingRoutineId = id;
+  document.getElementById('rtFormHead').textContent = '루틴 수정';
+  document.getElementById('rtSubmit').textContent = '저장';
+  document.getElementById('rtCancel').hidden = false;
+  document.getElementById('rtTitle').value = r.t;
+  document.getElementById('rtCat').value = r.c;
+  document.getElementById('rtTime').value = r.tm || '';
+  setPickedDays(r.days);
+  var form = document.getElementById('routineForm');
+  if (form.scrollIntoView) form.scrollIntoView({behavior:'smooth', block:'center'});
+  else form.scrollIntoView();
+}
+
+function submitRoutine(){
+  var t = document.getElementById('rtTitle').value.trim();
+  if (!t){ toast('루틴 이름을 입력해 주세요'); return; }
+  var days = Object.keys(pickedDays).filter(function(k){ return pickedDays[k]; }).map(Number);
+  if (!days.length){ toast('반복 요일을 하나 이상 골라 주세요'); return; }
+  days.sort(function(a,b){ return a-b; });
+  var c = document.getElementById('rtCat').value;
+  var tm = document.getElementById('rtTime').value || '';
+
+  if (editingRoutineId){
+    var r = (state.routines || []).filter(function(x){ return x.id === editingRoutineId; })[0];
+    if (r){ r.t = t; r.c = c; r.tm = tm; r.days = days; }
+    save(); resetRoutineForm(); renderRoutines();
+    toast('루틴을 수정했어요');
+  }else{
+    state.routines.push({id: uid(), t: t, c: c, tm: tm, days: days, on: true});
+    save(); resetRoutineForm(); renderRoutines();
+    toast('루틴을 등록했어요');
+  }
+}
+
+/* ---------- 화면 전환 ---------- */
+function setView(v){
+  view = v;
+  var todo = document.getElementById('view-todo');
+  var routines = document.getElementById('view-routines');
+  todo.hidden = (v !== 'todo');
+  routines.hidden = (v !== 'routines');
+  document.getElementById('calHeader').style.display = (v === 'todo') ? '' : 'none';
+  var t1 = document.getElementById('tabTodo'), t2 = document.getElementById('tabRoutines');
+  if (v === 'todo'){ t1.classList.add('active'); t2.classList.remove('active'); }
+  else { t2.classList.add('active'); t1.classList.remove('active'); }
+  if (v === 'routines') renderRoutines();
+  if (window.scrollTo) window.scrollTo(0, 0);
+}
+
 /* ---------- 안내 배너 ---------- */
 function renderBanner(){
   var b = document.getElementById('banner');
@@ -341,34 +545,41 @@ function exportJson(){
   a.download = 'my-todo-backup-' + todayStr() + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
-  toast('백업 파일을 내려받았어요');
+  toast('백업 파일을 내려받았어요 (루틴 포함)');
 }
 
 function importJson(file){
   var r = new FileReader();
   r.onerror = function(){ toast('파일을 읽지 못했어요'); };
   r.onload = function(){
-    var parsed;
+    var obj, parsed, incomingRoutines;
     try{
-      var obj = JSON.parse(r.result);
+      obj = JSON.parse(r.result);
       parsed = parseImportObject(obj);
+      incomingRoutines = parseRoutines(obj);
     }catch(e){
       toast('불러오지 못했어요: ' + (e && e.message ? e.message : '형식 확인 필요'));
       return;
     }
     var res = mergeItems(state.items, parsed.items);
+    var routineMsg = '';
+    if (incomingRoutines && incomingRoutines.length){
+      state.routines = incomingRoutines;
+      routineMsg = ' · 루틴 ' + incomingRoutines.length + '개도 함께';
+      renderRoutines();
+    }
     state.importedAt = new Date().toISOString();
     state.bannerDismissed = true;
     save(); renderBanner(); renderCalendar(); renderDay();
     var totalMsg = ' · 총 ' + allStat().replace('건 ·', '건,');
     if (res.added === 0 && res.fixed === 0){
-      toast('이미 모두 들어 있어요 (' + parsed.count.toLocaleString() + '건 확인)');
+      toast('이미 모두 들어 있어요 (' + parsed.count.toLocaleString() + '건 확인)' + routineMsg);
     }else if (res.added === 0){
-      toast(res.fixed.toLocaleString() + '건의 완료 표시를 기록에 맞췄어요' + totalMsg);
+      toast(res.fixed.toLocaleString() + '건의 완료 표시를 기록에 맞췄어요' + totalMsg + routineMsg);
     }else{
       var msg = res.added.toLocaleString() + '건을 불러왔어요';
       if (res.fixed) msg += ' (' + res.fixed.toLocaleString() + '건 완료 표시 정리)';
-      toast(msg + totalMsg);
+      toast(msg + totalMsg + routineMsg);
     }
   };
   r.readAsText(file);
@@ -387,6 +598,9 @@ function boot(){
   renderDay();
   renderBanner();
   updateAutoBtn();
+  setPickedDays([]);
+  renderRoutines();
+  setView('todo');
 
   document.getElementById('prevMonth').onclick = function(){
     viewMonth--; if (viewMonth < 0){ viewMonth = 11; viewYear--; } renderCalendar();
@@ -415,6 +629,7 @@ function boot(){
     toast(state.autoFill ? '매일 아침 오늘 루틴을 채워요' : '자동 채우기를 껐어요');
   };
   document.getElementById('exportBtn').onclick = exportJson;
+  document.getElementById('exportBtn2').onclick = exportJson;
   document.getElementById('importFile').onchange = function(e){
     if (e.target.files[0]) importJson(e.target.files[0]);
     e.target.value = '';
@@ -422,6 +637,27 @@ function boot(){
   document.getElementById('bannerImport').onclick = function(){ document.getElementById('importFile').click(); };
   document.getElementById('bannerClose').onclick = dismissBanner;
   document.getElementById('bannerLater').onclick = dismissBanner;
+
+  // 탭
+  document.getElementById('tabTodo').onclick = function(){ setView('todo'); };
+  document.getElementById('tabRoutines').onclick = function(){ setView('routines'); };
+
+  // 루틴 요일 선택
+  var chips = document.getElementById('rtDays').children;
+  for (var i = 0; i < chips.length; i++){
+    (function(btn){
+      btn.onclick = function(){
+        var d = Number(btn.getAttribute('data-day'));
+        pickedDays[d] = !pickedDays[d];
+        syncDayChips();
+      };
+    })(chips[i]);
+  }
+  document.getElementById('rtEvery').onclick = function(){ setPickedDays([0,1,2,3,4,5,6]); };
+  document.getElementById('rtWeekday').onclick = function(){ setPickedDays([1,2,3,4,5]); };
+  document.getElementById('rtWeekend').onclick = function(){ setPickedDays([0,6]); };
+  document.getElementById('routineForm').onsubmit = function(e){ e.preventDefault(); submitRoutine(); };
+  document.getElementById('rtCancel').onclick = function(){ resetRoutineForm(); };
 
   if (!localStorage.getItem(STORE)) save();
 }
@@ -444,5 +680,8 @@ if (typeof document !== 'undefined') boot();
 
 /* Node 테스트용 노출 */
 if (typeof module !== 'undefined' && module.exports){
-  module.exports = {parseImportObject: parseImportObject, mergeItems: mergeItems, normCat: normCat, emptyState: emptyState};
+  module.exports = {
+    parseImportObject: parseImportObject, mergeItems: mergeItems, normCat: normCat, emptyState: emptyState,
+    normalizeRoutine: normalizeRoutine, parseRoutines: parseRoutines, defaultRoutines: defaultRoutines, dayLabel: dayLabel
+  };
 }
