@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#7C5CFF">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="나만의 투두">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<title>나만의 투두</title>
+<style>
+  :root{
+    --purple:#7C5CFF; --purple-dark:#5b3fd6; --purple-soft:#efeaff; --purple-mid:#b9a8ff;
+    --ink:#1f1b2d; --ink-soft:#6b6580; --line:#eae6f6; --bg:#faf9ff; --card:#ffffff;
+    --ok:#4caf82; --todo:#c159e0; --work:#7c8cf8; --ex:#8b6cf0;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Malgun Gothic",sans-serif}
+  body{
+    padding-bottom:calc(96px + env(safe-area-inset-bottom));
+    padding-top:env(safe-area-inset-top);
+  }
+  header{position:sticky; top:0; z-index:20; background:linear-gradient(180deg,#f6f2ff 0%,#faf9ff 100%);
+    border-bottom:1px solid var(--line); padding:10px 14px 6px; backdrop-filter:blur(8px);
+    padding-top:calc(10px + env(safe-area-inset-top))}
+  .topbar{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+  .topbar h1{font-size:17px; margin:0; font-weight:700; letter-spacing:-.2px}
+  .topbar .spacer{flex:1}
+  .iconbtn{border:none; background:#fff; color:var(--purple-dark); width:34px; height:34px; border-radius:12px;
+    font-size:16px; display:grid; place-items:center; box-shadow:0 1px 3px rgba(80,60,160,.12); cursor:pointer}
+  .iconbtn:active{transform:scale(.95)}
+  .ghost{border:1px solid var(--line); background:#fff; color:var(--purple-dark); font-size:12px; font-weight:600;
+    padding:6px 10px; border-radius:10px; cursor:pointer}
+  .cal{display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:2px}
+  .dow{text-align:center; font-size:11px; color:var(--ink-soft); padding:2px 0 4px}
+  .dow.sun{color:#e2725b} .dow.sat{color:#5b8def}
+  .cell{position:relative; aspect-ratio:1/1.12; border-radius:12px; background:transparent; border:none;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; cursor:pointer; padding:0}
+  .cell .num{font-size:13px; font-weight:600; color:var(--ink)}
+  .cell.other .num{color:#cfc9e2}
+  .cell.sun .num{color:#e2725b}
+  .cell.sat .num{color:#5b8def}
+  .cell.today{border:1.5px solid var(--purple)}
+  .cell.sel{background:var(--purple)}
+  .cell.sel .num{color:#fff}
+  .cell.sel.sun .num,.cell.sel.sat .num{color:#fff}
+  .dots{display:flex; gap:2px; height:5px; align-items:center}
+  .dot{width:4px; height:4px; border-radius:50%; background:var(--purple-mid)}
+  .cell.sel .dot{background:#fff}
+  .dot.done{background:var(--purple)}
+  .cell.sel .dot.done{background:#fff; opacity:.95}
+  main{padding:12px 14px}
+  .banner{position:relative; background:linear-gradient(140deg,#f2edff 0%,#fbf9ff 70%); border:1px solid #e2d9ff;
+    border-radius:16px; padding:13px 14px 12px; margin:0 0 14px; box-shadow:0 1px 2px rgba(60,40,140,.05)}
+  .banner h3{margin:0 0 4px; font-size:13.5px; font-weight:700; color:var(--purple-dark); letter-spacing:-.2px}
+  .banner p{margin:0; font-size:12px; line-height:1.5; color:#6b6580}
+  .banner .brow{display:flex; gap:7px; align-items:center; margin-top:10px}
+  .banner .go{border:none; background:var(--purple); color:#fff; font-size:12.5px; font-weight:700;
+    padding:9px 14px; border-radius:10px; cursor:pointer}
+  .banner .later{border:none; background:transparent; color:#8d86a3; font-size:12px; padding:9px 6px; cursor:pointer}
+  .banner .x{position:absolute; top:7px; right:9px; border:none; background:transparent; color:#a9a2c0; font-size:17px; line-height:1; padding:4px; cursor:pointer}
+  .banner.ok{background:#f1faf5; border-color:#d5eddf}
+  .banner.ok h3{color:#2f8f66}
+  .dayhead{display:flex; align-items:baseline; gap:8px; margin:2px 0 10px}
+  .dayhead h2{font-size:16px; margin:0; font-weight:700}
+  .dayhead .prog{font-size:12px; color:var(--ink-soft); margin-left:auto}
+  .quick{display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:4px; scrollbar-width:none}
+  .quick::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto; border:1px solid var(--purple-mid); color:var(--purple-dark); background:#fff;
+    border-radius:999px; padding:7px 12px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap}
+  .chip.solid{background:var(--purple); border-color:var(--purple); color:#fff}
+  .chip:active{transform:scale(.97)}
+  .group{margin-bottom:14px}
+  .ghead{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:var(--ink-soft);
+    margin:0 0 6px 4px; letter-spacing:.2px}
+  .ghead .n{font-weight:600; color:#a9a2c0}
+  ul.items{list-style:none; margin:0; padding:0; background:var(--card); border-radius:16px;
+    box-shadow:0 1px 2px rgba(60,40,140,.06); overflow:hidden}
+  ul.items li{display:flex; align-items:center; gap:10px; padding:12px 12px; border-bottom:1px solid var(--line)}
+  ul.items li:last-child{border-bottom:none}
+  .box{flex:0 0 auto; width:22px; height:22px; border-radius:7px; border:1.8px solid var(--purple-mid);
+    display:grid; place-items:center; cursor:pointer; color:#fff; font-size:13px; background:#fff}
+  li.done .box{background:var(--purple); border-color:var(--purple)}
+  li.done .title{color:#a9a2c0; text-decoration:line-through}
+  .title{flex:1; font-size:14px; line-height:1.35; word-break:break-word; cursor:text}
+  .title input{font:inherit; width:100%; border:none; outline:none; background:#f3f0ff; border-radius:6px; padding:2px 4px}
+  .time{font-size:11px; color:var(--purple-dark); background:var(--purple-soft); border-radius:6px; padding:2px 6px; flex:0 0 auto}
+  .del{border:none; background:transparent; color:#cfc9e2; font-size:16px; padding:2px 2px; cursor:pointer; flex:0 0 auto}
+  .empty{background:var(--card); border-radius:16px; padding:18px; text-align:center; color:var(--ink-soft); font-size:13px}
+  form.add{display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:6px}
+  form.add .row2{grid-column:1/-1; display:grid; grid-template-columns:1fr 1fr auto; gap:8px}
+  input[type=text], select, input[type=time]{width:100%; border:1px solid var(--line); background:#fff;
+    border-radius:12px; padding:11px 12px; font-size:14px; color:var(--ink); outline:none;
+    -webkit-appearance:none; appearance:none}
+  input[type=text]:focus, select:focus{border-color:var(--purple-mid)}
+  select{background-image:none}
+  .btn{border:none; background:var(--purple); color:#fff; border-radius:12px; padding:0 18px; font-size:14px;
+    font-weight:700; cursor:pointer; min-height:44px}
+  .btn:active{background:var(--purple-dark)}
+  .tools{margin-top:18px; display:flex; gap:8px; flex-wrap:wrap}
+  .tools button, .tools label{flex:1 1 auto; text-align:center; border:1px solid var(--line); background:#fff;
+    color:var(--purple-dark); font-size:12px; font-weight:600; padding:11px 10px; border-radius:12px; cursor:pointer}
+  .tools input[type=file]{display:none}
+  .foot{margin:14px 2px 0; font-size:11px; color:#b3adc6; line-height:1.5}
+  .stat{display:flex; gap:8px; margin-top:12px}
+  .stat div{flex:1; background:var(--card); border-radius:14px; padding:10px 12px; font-size:11px; color:var(--ink-soft)}
+  .stat b{display:block; font-size:16px; color:var(--purple-dark); margin-top:2px}
+  .toast{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(22px + env(safe-area-inset-bottom));
+    background:#2c2542; color:#fff; font-size:13px; padding:10px 16px; border-radius:999px; opacity:0;
+    pointer-events:none; transition:opacity .2s; z-index:50; max-width:86vw; text-align:center}
+  .toast.show{opacity:.95}
+</style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <button class="iconbtn" id="prevMonth" aria-label="이전 달">‹</button>
+    <h1 id="monthTitle">-</h1>
+    <button class="iconbtn" id="nextMonth" aria-label="다음 달">›</button>
+    <div class="spacer"></div>
+    <button class="ghost" id="todayBtn">오늘</button>
+  </div>
+  <div class="cal" id="cal"></div>
+</header>
+
+<main>
+  <div class="banner" id="banner" hidden>
+    <button class="x" id="bannerClose" aria-label="안내 닫기">×</button>
+    <h3 id="bannerTitle">내 기록 불러오기</h3>
+    <p id="bannerBody">투두메이트에서 내려받은 기록 파일(todomate-records.json)을 한 번만 불러오면 2023년부터의 기록이 그대로 들어와요.</p>
+    <div class="brow">
+      <button class="go" id="bannerImport">JSON 불러오기</button>
+      <button class="later" id="bannerLater">나중에</button>
+    </div>
+  </div>
+
+  <div class="dayhead">
+    <h2 id="dayTitle">-</h2>
+    <span class="prog" id="dayProg"></span>
+  </div>
+
+  <div class="quick" id="quick"></div>
+  <div id="groups"></div>
+
+  <form class="add" id="addForm" autocomplete="off">
+    <input type="text" id="newTitle" placeholder="할 일을 입력하고 추가" maxlength="80">
+    <button class="btn" type="submit">추가</button>
+    <div class="row2">
+      <select id="newCat">
+        <option value="T">할 일</option>
+        <option value="R">루틴(출퇴근·업무)</option>
+        <option value="E">운동</option>
+      </select>
+      <input type="time" id="newTime">
+      <button class="btn" type="button" id="clearTime" style="background:#f2eeff;color:var(--purple-dark)">시간 해제</button>
+    </div>
+  </form>
+
+  <div class="stat">
+    <div>이번 달<b id="mStat">-</b></div>
+    <div>전체 기록<b id="aStat">-</b></div>
+  </div>
+
+  <div class="tools">
+    <button id="autoBtn">오늘 루틴 자동 채우기: 켜짐</button>
+  </div>
+  <div class="tools">
+    <button id="exportBtn">JSON 내보내기</button>
+    <label for="importFile">JSON 불러오기</label>
+    <input type="file" id="importFile" accept="application/json,.json,text/plain">
+  </div>
+  <p class="foot">
+    기록은 이 기기의 브라우저(localStorage)에만 저장되고 서버로 보내지 않아요. 사파리에서 공유 버튼 → <b>홈 화면에 추가</b>를 하면 앱처럼 열려요.<br>
+    데이터를 옮길 때는 JSON 내보내기/불러오기를 쓰세요. 불러오기는 기존 기록에 합쳐지고 같은 항목은 중복되지 않아요.<br>
+    투두메이트 달력에서는 '완료한 일'만 보여서 과거 기록은 모두 완료(✓)로 들어옵니다.
+  </p>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
