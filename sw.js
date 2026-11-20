@@ -1,5 +1,7 @@
-/* 나만의 투두 — 오프라인 앱 셸 캐시 */
-const CACHE = 'mytodo-shell-v1';
+/* 나만의 투두 — 오프라인 앱 셸 캐시
+   화면·코드(html/js/json)는 네트워크 우선, 실패하면 캐시.
+   이미지(아이콘)는 캐시 우선. 업데이트가 한 박자 늦게 도착하지 않게 하기 위함. */
+const CACHE = 'mytodo-shell-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -32,30 +34,27 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // 화면(문서) 요청: 네트워크 우선, 실패하면 캐시된 앱 셸
-  if (req.mode === 'navigate') {
+  const isCode = req.mode === 'navigate' || /\.(html|js|json)$/i.test(url.pathname) || url.pathname.endsWith('/');
+
+  if (isCode) {
     e.respondWith(
       fetch(req, { cache: 'no-cache' })
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./index.html', copy));
+          caches.open(CACHE).then((c) => c.put(req, copy));
           return res;
         })
-        .catch(() => caches.match('./index.html').then((r) => r || caches.match('./')))
+        .catch(() => caches.match(req).then((r) => r || caches.match('./index.html')))
     );
     return;
   }
 
-  // 나머지 파일: 캐시 우선 + 뒤에서 갱신
   e.respondWith(
     caches.match(req).then((hit) => {
-      const net = fetch(req)
-        .then((res) => {
-          if (res && res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
-          return res;
-        })
-        .catch(() => hit);
-      return hit || net;
+      return hit || fetch(req).then((res) => {
+        if (res && res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
+        return res;
+      });
     })
   );
 });
