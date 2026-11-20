@@ -13,6 +13,7 @@ var viewYear = 0, viewMonth = 0;
 var view = 'todo';
 var editingRoutineId = null;
 var pickedDays = {};
+var pickedFreq = 'weekly';
 
 /* ---------- 작은 도우미 ---------- */
 function pad2(n){ return String(n).padStart(2,'0'); }
@@ -31,11 +32,11 @@ function el(tag, cls, text){
 /* ---------- 루틴 기본값 ---------- */
 function defaultRoutines(){
   return [
-    {id:'d1', t:'출근', c:'R', tm:'08:30', days:[1,2,3,4,5], on:true},
-    {id:'d2', t:'일일 업무보고', c:'R', tm:'', days:[1,2,3,4,5], on:true},
-    {id:'d3', t:'퇴근', c:'R', tm:'17:30', days:[1,2,3,4,5], on:true},
-    {id:'d4', t:'주간업무보고', c:'R', tm:'17:00', days:[4], on:true},
-    {id:'d5', t:'집 가기', c:'T', tm:'', days:[1,2,3,4,5], on:true}
+    {id:'d1', t:'출근', c:'R', tm:'08:30', freq:'weekly', days:[1,2,3,4,5], on:true},
+    {id:'d2', t:'일일 업무보고', c:'R', tm:'', freq:'weekly', days:[1,2,3,4,5], on:true},
+    {id:'d3', t:'퇴근', c:'R', tm:'17:30', freq:'weekly', days:[1,2,3,4,5], on:true},
+    {id:'d4', t:'주간업무보고', c:'R', tm:'17:00', freq:'weekly', days:[4], on:true},
+    {id:'d5', t:'집 가기', c:'T', tm:'', freq:'weekly', days:[1,2,3,4,5], on:true}
   ];
 }
 
@@ -52,18 +53,30 @@ function normalizeRoutine(r){
   if (!r || typeof r !== 'object') return null;
   var t = String((r.t != null ? r.t : (r.title != null ? r.title : ''))).trim();
   if (!t) return null;
+  var id = (typeof r.id === 'string' && r.id) ? r.id : uid();
+  var c = normCat(r.c != null ? r.c : r.cat, r.category);
+  var tm = String(r.tm != null ? r.tm : (r.time != null ? r.time : '')) || '';
+  var on = r.on !== false;
+  var isMonthly = String(r.freq || '').toLowerCase() === 'monthly' ||
+                  (r.freq == null && r.monthDay != null);
+
+  /* 매월 반복: 요일 목록 대신 '매월 N일'을 씀 (기존 주간 루틴 데이터와 하위 호환) */
+  if (isMonthly){
+    var md = Number(r.monthDay);
+    if (!(md >= 1 && md <= 31) || md % 1 !== 0) return null;
+    return {
+      id: id, t: t, c: c, tm: tm, freq: 'monthly', monthDay: md,
+      weekendToFriday: r.weekendToFriday !== false, days: [], on: on
+    };
+  }
+
   var days = (Array.isArray(r.days) ? r.days : []).map(Number).filter(function(d){ return d >= 0 && d <= 6 && d % 1 === 0; });
   var uniq = [];
   days.forEach(function(d){ if (uniq.indexOf(d) < 0) uniq.push(d); });
   if (!uniq.length) return null;
   uniq.sort(function(a,b){ return a-b; });
   return {
-    id: (typeof r.id === 'string' && r.id) ? r.id : uid(),
-    t: t,
-    c: normCat(r.c != null ? r.c : r.cat, r.category),
-    tm: String(r.tm != null ? r.tm : (r.time != null ? r.time : '')) || '',
-    days: uniq,
-    on: r.on !== false
+    id: id, t: t, c: c, tm: tm, freq: 'weekly', days: uniq, on: on
   };
 }
 
@@ -339,15 +352,51 @@ function addItem(title, cat, time){
 }
 
 /* ---------- 루틴 적용 ---------- */
+function daysInMonth(y, m){ return new Date(y, m + 1, 0).getDate(); }
+
+/* 매월 루틴이 그 달에 실제로 들어가는 날짜(YYYY-MM-DD)
+   - 그 달에 없는 날(예: 2월 30일)은 그 달 말일로 보정
+   - weekendToFriday: 토요일 → 그 주 금요일(-1일), 일요일 → 금요일(-2일) */
+function monthlyApplyDate(r, y, m){
+  var last = daysInMonth(y, m);
+  var wanted = Math.floor(Number(r.monthDay));
+  if (!(wanted >= 1)) wanted = 1;
+  var day = Math.min(wanted, last);
+  var d = new Date(y, m, day);
+  if (r.weekendToFriday !== false){
+    var w = d.getDay();
+    if (w === 6) d = new Date(y, m, day - 1);
+    else if (w === 0) d = new Date(y, m, day - 2);
+  }
+  return fmt(d);
+}
+
+/* 이 루틴이 해당 날짜(dateStr)에 적용되는지 */
+function routineApplies(r, dateStr){
+  if (!r || r.on === false) return false;
+  var d = parseDate(dateStr);
+  if (r.freq === 'monthly'){
+    var y = d.getFullYear(), m = d.getMonth();
+    /* 1·2일이 주말이면 지난달 말 금요일로 당겨지므로 앞뒤 달까지 확인 */
+    for (var k = -1; k <= 1; k++){
+      var yy = y, mm = m + k;
+      if (mm < 0){ mm = 11; yy--; } else if (mm > 11){ mm = 0; yy++; }
+      if (monthlyApplyDate(r, yy, mm) === dateStr) return true;
+    }
+    return false;
+  }
+  var days = Array.isArray(r.days) ? r.days : [];
+  return days.indexOf(d.getDay()) >= 0;
+}
+
 function routinesFor(dateStr){
-  var dow = parseDate(dateStr).getDay();
-  return (state.routines || []).filter(function(r){ return r.on !== false && r.days.indexOf(dow) >= 0; });
+  return (state.routines || []).filter(function(r){ return routineApplies(r, dateStr); });
 }
 
 function fillRoutine(silent){
   var set = routinesFor(selDate);
   if (!set.length){
-    if (!silent) toast('이 요일에 맞는 루틴이 없어요 · 루틴 화면에서 등록해 보세요');
+    if (!silent) toast('이 날에 적용할 루틴이 없어요 · 루틴 화면에서 등록해 보세요');
     return;
   }
   var arr = ensure(selDate), added = 0;
@@ -383,6 +432,15 @@ function dayLabel(days){
   return s.map(function(d){ return DOW[d]; }).join('·');
 }
 
+/* 루틴 카드 요약: '매월 20일 (주말→금)' / '평일' / '월·수' */
+function routineLabel(r){
+  if (!r) return '';
+  if (r.freq === 'monthly'){
+    return '매월 ' + r.monthDay + '일' + (r.weekendToFriday !== false ? ' (주말→금)' : '');
+  }
+  return dayLabel(r.days || []);
+}
+
 function renderRoutines(){
   var host = document.getElementById('routineList');
   host.innerHTML = '';
@@ -415,7 +473,7 @@ function renderRoutines(){
     card.appendChild(row1);
 
     var row2 = el('div', 'r2');
-    row2.appendChild(el('div', 'rdays', CAT[r.c].short + ' · ' + dayLabel(r.days)));
+    row2.appendChild(el('div', 'rdays', CAT[r.c].short + ' · ' + routineLabel(r)));
 
     var sw = el('button', 'sw' + (r.on !== false ? ' on' : ''));
     sw.type = 'button';
@@ -463,6 +521,44 @@ function setPickedDays(days){
   syncDayChips();
 }
 
+/* 반복 주기 전환: 매주(요일) ↔ 매월(특정 일자) */
+function setFreq(f){
+  pickedFreq = (String(f) === 'monthly') ? 'monthly' : 'weekly';
+  var seg = document.getElementById('rtFreq');
+  if (seg){
+    var kids = seg.children;
+    for (var i = 0; i < kids.length; i++){
+      if (kids[i].getAttribute('data-freq') === pickedFreq) kids[i].classList.add('on');
+      else kids[i].classList.remove('on');
+    }
+  }
+  var wbox = document.getElementById('rtWeeklyBox');
+  var mbox = document.getElementById('rtMonthlyBox');
+  if (wbox) wbox.hidden = (pickedFreq !== 'weekly');
+  if (mbox) mbox.hidden = (pickedFreq !== 'monthly');
+  if (pickedFreq === 'monthly') updateMonthlyPreview();
+}
+
+/* 이번 달·다음 달에 실제로 들어갈 날을 미리 보여 줌 */
+function updateMonthlyPreview(){
+  var box = document.getElementById('rtMonthPreview');
+  var sel = document.getElementById('rtMonthDay');
+  var wf = document.getElementById('rtWeekendFri');
+  if (!box || !sel || !wf) return;
+  var md = Number(sel.value);
+  if (!(md >= 1)) md = 1;
+  var r = {monthDay: md, weekendToFriday: !!wf.checked};
+  var now = new Date();
+  var parts = [];
+  for (var k = 0; k < 2; k++){
+    var y = now.getFullYear(), m = now.getMonth() + k;
+    if (m > 11){ m -= 12; y++; }
+    var dd = parseDate(monthlyApplyDate(r, y, m));
+    parts.push((m + 1) + '월 ' + dd.getDate() + '일(' + DOW[dd.getDay()] + ')');
+  }
+  box.textContent = '이번 달 · ' + parts[0] + ' → 다음 달 · ' + parts[1];
+}
+
 function resetRoutineForm(){
   editingRoutineId = null;
   document.getElementById('rtFormHead').textContent = '새 루틴 등록';
@@ -472,6 +568,9 @@ function resetRoutineForm(){
   document.getElementById('rtCat').value = 'R';
   document.getElementById('rtTime').value = '';
   setPickedDays([]);
+  document.getElementById('rtMonthDay').value = '20';
+  document.getElementById('rtWeekendFri').checked = true;
+  setFreq('weekly');
 }
 
 function startEditRoutine(id){
@@ -484,7 +583,10 @@ function startEditRoutine(id){
   document.getElementById('rtTitle').value = r.t;
   document.getElementById('rtCat').value = r.c;
   document.getElementById('rtTime').value = r.tm || '';
-  setPickedDays(r.days);
+  setPickedDays(r.days || []);
+  document.getElementById('rtMonthDay').value = String(r.monthDay || 20);
+  document.getElementById('rtWeekendFri').checked = (r.weekendToFriday !== false);
+  setFreq(r.freq === 'monthly' ? 'monthly' : 'weekly');
   var form = document.getElementById('routineForm');
   if (form.scrollIntoView) form.scrollIntoView({behavior:'smooth', block:'center'});
   else form.scrollIntoView();
@@ -493,21 +595,37 @@ function startEditRoutine(id){
 function submitRoutine(){
   var t = document.getElementById('rtTitle').value.trim();
   if (!t){ toast('루틴 이름을 입력해 주세요'); return; }
-  var days = Object.keys(pickedDays).filter(function(k){ return pickedDays[k]; }).map(Number);
-  if (!days.length){ toast('반복 요일을 하나 이상 골라 주세요'); return; }
-  days.sort(function(a,b){ return a-b; });
   var c = document.getElementById('rtCat').value;
   var tm = document.getElementById('rtTime').value || '';
+  var data;
+
+  if (pickedFreq === 'monthly'){
+    var md = Number(document.getElementById('rtMonthDay').value);
+    if (!(md >= 1 && md <= 31) || md % 1 !== 0){ toast('매월 며칠에 반복할지 골라 주세요'); return; }
+    data = {t: t, c: c, tm: tm, freq: 'monthly', monthDay: md,
+            weekendToFriday: !!document.getElementById('rtWeekendFri').checked, days: []};
+  }else{
+    var days = Object.keys(pickedDays).filter(function(k){ return pickedDays[k]; }).map(Number);
+    if (!days.length){ toast('반복 요일을 하나 이상 골라 주세요'); return; }
+    days.sort(function(a,b){ return a-b; });
+    data = {t: t, c: c, tm: tm, freq: 'weekly', days: days};
+  }
 
   if (editingRoutineId){
     var r = (state.routines || []).filter(function(x){ return x.id === editingRoutineId; })[0];
-    if (r){ r.t = t; r.c = c; r.tm = tm; r.days = days; }
+    if (r){
+      r.t = data.t; r.c = data.c; r.tm = data.tm; r.freq = data.freq; r.days = data.days;
+      if (data.freq === 'monthly'){ r.monthDay = data.monthDay; r.weekendToFriday = data.weekendToFriday; }
+      else { delete r.monthDay; delete r.weekendToFriday; }
+    }
     save(); resetRoutineForm(); renderRoutines();
     toast('루틴을 수정했어요');
   }else{
-    state.routines.push({id: uid(), t: t, c: c, tm: tm, days: days, on: true});
+    var n = {id: uid(), t: data.t, c: data.c, tm: data.tm, freq: data.freq, days: data.days, on: true};
+    if (data.freq === 'monthly'){ n.monthDay = data.monthDay; n.weekendToFriday = data.weekendToFriday; }
+    state.routines.push(n);
     save(); resetRoutineForm(); renderRoutines();
-    toast('루틴을 등록했어요');
+    toast(data.freq === 'monthly' ? '매월 ' + data.monthDay + '일 루틴을 등록했어요' : '루틴을 등록했어요');
   }
 }
 
@@ -656,6 +774,24 @@ function boot(){
   document.getElementById('rtEvery').onclick = function(){ setPickedDays([0,1,2,3,4,5,6]); };
   document.getElementById('rtWeekday').onclick = function(){ setPickedDays([1,2,3,4,5]); };
   document.getElementById('rtWeekend').onclick = function(){ setPickedDays([0,6]); };
+
+  // 반복 주기(매주 / 매월) + 매월 일자 선택
+  var segs = document.getElementById('rtFreq').children;
+  for (var s = 0; s < segs.length; s++){
+    (function(btn){
+      btn.onclick = function(){ setFreq(btn.getAttribute('data-freq')); };
+    })(segs[s]);
+  }
+  var mdSel = document.getElementById('rtMonthDay');
+  for (var md = 1; md <= 31; md++){
+    var opt = document.createElement('option');
+    opt.value = String(md); opt.textContent = md + '일';
+    mdSel.appendChild(opt);
+  }
+  mdSel.value = '20';
+  mdSel.onchange = updateMonthlyPreview;
+  document.getElementById('rtWeekendFri').onchange = updateMonthlyPreview;
+  setFreq('weekly');
   document.getElementById('routineForm').onsubmit = function(e){ e.preventDefault(); submitRoutine(); };
   document.getElementById('rtCancel').onclick = function(){ resetRoutineForm(); };
 
@@ -678,10 +814,19 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator &&
 
 if (typeof document !== 'undefined') boot();
 
-/* Node 테스트용 노출 */
+/* Node 테스트·브라우저 검증용 노출 (개인 데이터 없음) */
 if (typeof module !== 'undefined' && module.exports){
   module.exports = {
     parseImportObject: parseImportObject, mergeItems: mergeItems, normCat: normCat, emptyState: emptyState,
-    normalizeRoutine: normalizeRoutine, parseRoutines: parseRoutines, defaultRoutines: defaultRoutines, dayLabel: dayLabel
+    normalizeRoutine: normalizeRoutine, parseRoutines: parseRoutines, defaultRoutines: defaultRoutines,
+    dayLabel: dayLabel, routineLabel: routineLabel, monthlyApplyDate: monthlyApplyDate,
+    routineApplies: routineApplies, daysInMonth: daysInMonth, fmt: fmt, parseDate: parseDate
+  };
+}
+if (typeof window !== 'undefined'){
+  window.__mytodo = {
+    monthlyApplyDate: monthlyApplyDate, routineApplies: routineApplies, routineLabel: routineLabel,
+    normalizeRoutine: normalizeRoutine, daysInMonth: daysInMonth, parseDate: parseDate, fmt: fmt,
+    routinesFor: function(dateStr){ return routinesFor(dateStr).map(function(r){ return r.t; }); }
   };
 }
