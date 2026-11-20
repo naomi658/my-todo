@@ -95,7 +95,7 @@ function parseImportObject(obj){
 /* 같은 날 · 같은 제목 · 같은 분류는 중복으로 보고 새로 넣지 않되,
    이미 있는 항목이 미완료이고 불러온 기록이 완료면 완료로 맞춰 줌 */
 function mergeItems(target, incoming){
-  var added = 0;
+  var added = 0, fixed = 0;
   Object.keys(incoming).forEach(function(date){
     if (!target[date]) target[date] = [];
     var seen = {};
@@ -104,8 +104,10 @@ function mergeItems(target, incoming){
       var k = it.t + '|' + it.c;
       var have = seen[k];
       if (have){
-        if (it.d && !have.d) have.d = true;
-        if (!have.tm && it.tm) have.tm = it.tm;
+        var changed = false;
+        if (it.d && !have.d){ have.d = true; changed = true; }
+        if (!have.tm && it.tm){ have.tm = it.tm; changed = true; }
+        if (changed) fixed++;
         return;
       }
       seen[k] = it;
@@ -113,7 +115,7 @@ function mergeItems(target, incoming){
       added++;
     });
   });
-  return added;
+  return {added: added, fixed: fixed};
 }
 
 /* ---------- 저장/불러오기 ---------- */
@@ -354,15 +356,19 @@ function importJson(file){
       toast('불러오지 못했어요: ' + (e && e.message ? e.message : '형식 확인 필요'));
       return;
     }
-    var before = allStat();
-    var added = mergeItems(state.items, parsed.items);
+    var res = mergeItems(state.items, parsed.items);
     state.importedAt = new Date().toISOString();
     state.bannerDismissed = true;
     save(); renderBanner(); renderCalendar(); renderDay();
-    if (added === 0){
+    var totalMsg = ' · 총 ' + allStat().replace('건 ·', '건,');
+    if (res.added === 0 && res.fixed === 0){
       toast('이미 모두 들어 있어요 (' + parsed.count.toLocaleString() + '건 확인)');
+    }else if (res.added === 0){
+      toast(res.fixed.toLocaleString() + '건의 완료 표시를 기록에 맞췄어요' + totalMsg);
     }else{
-      toast(added.toLocaleString() + '건을 불러왔어요 · 총 ' + allStat().replace('건 ·', '건,'));
+      var msg = res.added.toLocaleString() + '건을 불러왔어요';
+      if (res.fixed) msg += ' (' + res.fixed.toLocaleString() + '건 완료 표시 정리)';
+      toast(msg + totalMsg);
     }
   };
   r.readAsText(file);
